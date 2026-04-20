@@ -36,6 +36,9 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         self.model = None
         self.data_path = None
         self.lgmd = None
+        self.home_geo_point = None
+        self.drone_clearance = 3.0
+        self.city_custom_goal_max_sample_tries = 200
 
     def set_config(self, cfg):
         """get config from .ini file
@@ -93,6 +96,13 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             goal_position = [280, -200, 40]
             self.dynamic_model.set_start(start_position, random_angle=0)
             self.dynamic_model._set_goal_pose_single(goal_position)
+            self.work_space_x = [-100, 100]
+            self.work_space_y = [-100, 100]
+            self.work_space_z = [0, 100]
+            self.max_episode_steps = 400
+        elif self.env_name == 'City_Custom':
+            start_position = [0, 0, 20]
+            self.dynamic_model.set_start(start_position, random_angle=0)
             self.work_space_x = [-100, 350]
             self.work_space_y = [-300, 100]
             self.work_space_z = [0, 100]
@@ -175,6 +185,14 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         self.screen_height = cfg.getint('environment', 'screen_height')
         self.screen_width = cfg.getint('environment', 'screen_width')
 
+        if cfg.has_option('environment', 'drone_clearance'):
+            self.drone_clearance = cfg.getfloat('environment', 'drone_clearance')
+        if cfg.has_option('environment', 'goal_sample_max_tries'):
+            self.city_custom_goal_max_sample_tries = cfg.getint('environment', 'goal_sample_max_tries')
+
+        if self.env_name == 'City_Custom':
+            self.home_geo_point = self.client.getHomeGeoPoint()
+
         self.trajectory_list = []
 
         # observation space vector or image
@@ -199,6 +217,10 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             self.reward_type = None
 
     def reset(self):
+        if self.env_name == 'City_Custom':
+            goal_position = self.get_city_custom_goal_position()
+            self.dynamic_model._set_goal_pose_single(goal_position)
+
         # reset state
         self.dynamic_model.reset()
 
@@ -213,6 +235,67 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         obs = self.get_obs()
 
         return obs
+
+    def get_city_custom_goal_position(self):
+        """
+        Sample a random valid goal for City_Custom.
+
+        Returned coordinates use this project convention: [x, y, z_up].
+        """
+        if self.home_geo_point is None:
+            self.home_geo_point = self.client.getHomeGeoPoint()
+
+        for _ in range(self.city_custom_goal_max_sample_tries):
+            point_ned = np.array([
+                np.random.uniform(self.work_space_x[0] * 0.66, self.work_space_x[1] * 0.66),
+                np.random.uniform(self.work_space_y[0] * 0.66, self.work_space_y[1]* 0.66),
+                np.random.uniform(-self.work_space_z[1] * 0.66, -self.work_space_z[0] * 0.66),
+            ], dtype=np.float32)
+
+            if self._is_target_valid(point_ned):
+                return [float(point_ned[0]), float(point_ned[1]), float(-point_ned[2])]
+
+        raise RuntimeError(
+            "Failed to sample a valid City_Custom goal point within max attempts."
+        )
+
+    def _is_target_valid(self, point: np.ndarray) -> bool:
+        """检查候选目标点是否在自由空间中且有足够间距。"""
+        target_geo = self._ned_to_geo(point)
+
+        # Phase 1: 从高空向下检查，确认点不在障碍物内部
+        sky_point = self._ned_to_geo(np.array([point[0], point[1], -200.0], dtype=np.float32))
+        if not self.client.simTestLineOfSightBetweenPoints(sky_point, target_geo):
+            return False
+
+        # Phase 2: 检查 drone_clearance 范围内 6 个方向无障碍物
+        directions = [(1, 0, 0), (-1, 0, 0), (0, 1, 0),
+                      (0, -1, 0), (0, 0, 1), (0, 0, -1)]
+        for dx, dy, dz in directions:
+            offset = np.array([dx, dy, dz], dtype=np.float32) * self.drone_clearance
+            end_geo = self._ned_to_geo(point + offset)
+            if not self.client.simTestLineOfSightBetweenPoints(target_geo, end_geo):
+                return False
+
+        return True
+
+    def _ned_to_geo(self, point: np.ndarray):
+        """Convert local NED [north, east, down] to AirSim GeoPoint."""
+        if self.home_geo_point is None:
+            self.home_geo_point = self.client.getHomeGeoPoint()
+
+        earth_radius = 6378137.0
+        lat0 = math.radians(self.home_geo_point.latitude)
+
+        d_lat = point[0] / earth_radius
+        d_lon = point[1] / (earth_radius * math.cos(lat0))
+
+        geo_point = airsim.GeoPoint()
+        geo_point.latitude = self.home_geo_point.latitude + math.degrees(d_lat)
+        geo_point.longitude = self.home_geo_point.longitude + math.degrees(d_lon)
+        geo_point.altitude = self.home_geo_point.altitude - float(point[2])
+
+        return geo_point
 
     def step(self, action):
         # set action
