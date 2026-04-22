@@ -7,6 +7,7 @@ import keyboard
 import torch as th
 import numpy as np
 import math
+import time
 import cv2
 
 from .dynamics.multirotor_simple import MultirotorDynamicsSimple
@@ -101,12 +102,14 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             self.work_space_z = [0, 100]
             self.max_episode_steps = 400
         elif self.env_name == 'City_Custom':
-            start_position = [0, 0, 20]
+            start_position = [0, 0, 10]
             self.dynamic_model.set_start(start_position, random_angle=0)
-            self.work_space_x = [-100, 350]
-            self.work_space_y = [-300, 100]
+            # self.work_space_x = [-100, 350]
+            # self.work_space_y = [-300, 100]
+            self.work_space_x = [-100, 100]
+            self.work_space_y = [-100, 100]
             self.work_space_z = [0, 100]
-            self.max_episode_steps = 400
+            self.max_episode_steps = 800
         elif self.env_name == 'City_400':
             # note: the start and end points will be covered by update_start_and_goal_pose_random function
             start_position = [0, 0, 50]
@@ -244,16 +247,22 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         """
         if self.home_geo_point is None:
             self.home_geo_point = self.client.getHomeGeoPoint()
+        
+        np.random.seed(int(time.time() * 1000) % (2**32 - 1))
 
         for _ in range(self.city_custom_goal_max_sample_tries):
             point_ned = np.array([
                 np.random.uniform(self.work_space_x[0] * 0.66, self.work_space_x[1] * 0.66),
                 np.random.uniform(self.work_space_y[0] * 0.66, self.work_space_y[1]* 0.66),
-                np.random.uniform(-self.work_space_z[1] * 0.66, -self.work_space_z[0] * 0.66),
+                # np.random.uniform(-self.work_space_z[1] * 0.66, -self.work_space_z[0] * 0.66),
+                np.random.uniform(-15, -5)
             ], dtype=np.float32)
 
             if self._is_target_valid(point_ned):
-                return [float(point_ned[0]), float(point_ned[1]), float(-point_ned[2])]
+                goal_position = [float(point_ned[0]), float(point_ned[1]), float(-point_ned[2])]
+                print("City_Custom sampled goal: x={:.2f}, y={:.2f}, z={:.2f}".format(
+                    goal_position[0], goal_position[1], goal_position[2]))
+                return goal_position
 
         raise RuntimeError(
             "Failed to sample a valid City_Custom goal point within max attempts."
