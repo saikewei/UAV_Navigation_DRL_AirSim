@@ -254,8 +254,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             point_ned = np.array([
                 np.random.uniform(self.work_space_x[0] * 0.66, self.work_space_x[1] * 0.66),
                 np.random.uniform(self.work_space_y[0] * 0.66, self.work_space_y[1]* 0.66),
-                # np.random.uniform(-self.work_space_z[1] * 0.66, -self.work_space_z[0] * 0.66),
-                np.random.uniform(-15, -5)
+                np.random.uniform(-self.work_space_z[1] * 0.66, -self.work_space_z[0] * 0.66),
+                # np.random.uniform(-15, -5)
             ], dtype=np.float32)
 
             if self._is_target_valid(point_ned):
